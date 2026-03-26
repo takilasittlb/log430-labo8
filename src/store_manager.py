@@ -11,6 +11,7 @@ from orders.handlers.order_created_handler import OrderCreatedHandler
 from orders.handlers.order_creation_failed_handler import OrderCreationFailedHandler
 from orders.handlers.order_cancelled_handler import OrderCancelledHandler
 from orders.handlers.saga_completed_handler import SagaCompletedHandler
+from payments.outbox_processor import OutboxProcessor
 from stocks.handlers.stock_decreased_handler import StockDecreasedHandler
 from stocks.handlers.stock_decrease_failed_handler import StockDecreaseFailedHandler
 from stocks.handlers.stock_increased_handler import StockIncreasedHandler
@@ -30,6 +31,17 @@ app = Flask(__name__)
 thread = threading.Timer(10.0, populate_redis_on_startup)
 thread.daemon = True
 thread.start()
+
+# Lancement du processeur Outbox au démarrage
+# with app.app_context():
+#     try:
+#         OutboxProcessor().run()
+#     except Exception as e:
+#         print(f"Erreur Outbox démarrage: {e}")
+is_outbox_processor_running = False
+if not is_outbox_processor_running:
+    OutboxProcessor().run()
+    is_outbox_processor_running = True
 
 registry = HandlerRegistry()
 registry.register(OrderCreatedHandler())

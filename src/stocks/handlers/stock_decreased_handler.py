@@ -8,6 +8,10 @@ import config
 from event_management.base_handler import EventHandler
 from orders.commands.order_event_producer import OrderEventProducer
 
+from db import get_sqlalchemy_session
+from payments.models.outbox import Outbox
+from payments.outbox_processor import OutboxProcessor
+
 
 class StockDecreasedHandler(EventHandler):
     """Handles StockDecreased events"""
@@ -34,13 +38,30 @@ class StockDecreasedHandler(EventHandler):
         dans l'API Payments et non dans Store Manager, car c'est l'API Payments qui doit 
         être notifiée de la mise à jour du stock afin de générer une transaction de paiement.
         '''
+        session = get_sqlalchemy_session()
         try:
-            # Si la transaction de paiement a été crée, déclenchez PaymentCreated.
-            event_data['event'] = "PaymentCreated"
-            self.logger.debug(f"payment_link={event_data['payment_link']}")
-            OrderEventProducer().get_instance().send(config.KAFKA_TOPIC, value=event_data)
+            new_outbox_item = Outbox(
+                order_id=event_data['order_id'],
+                user_id=event_data['user_id'],
+                total_amount=event_data['total_amount'],
+                order_items=event_data['order_items']
+            )
+            session.add(new_outbox_item)
+            session.flush() # Préparation de l'ID sans fermer la transaction
+            session.commit() # Confirmation en base de données
+
+            self.logger.info(f"Outbox créée pour la commande {event_data['order_id']}. Appel du processeur...")
+            OutboxProcessor().run(new_outbox_item)
+
+
         except Exception as e:
             # TODO: Si la transaction de paiement n'était pas crée, déclenchez l'événement adéquat selon le diagramme.
-            event_data['error'] = str(e)
+            session.rollback()
+            self.logger.error(f"Erreur lors de la création de l'Outbox : {str(e)}")
 
+            event_data['event'] = "PaymentCreationFailed"
+            event_data['error'] = str(e)
+            OrderEventProducer().get_instance().send(config.KAFKA_TOPIC, value=event_data)
+        finally:
+            session.close()
 

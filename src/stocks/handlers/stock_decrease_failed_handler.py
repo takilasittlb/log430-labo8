@@ -28,7 +28,9 @@ class StockDecreaseFailedHandler(EventHandler):
             # Si l'operation a réussi, déclenchez OrderCancelled.
             event_data['event'] = "OrderCancelled"
             OrderEventProducer().get_instance().send(config.KAFKA_TOPIC, value=event_data)
+            self.logger.debug(f"Transition vers OrderCreationFailed pour la commande {event_data.get('order_id')}")
         except Exception as e:
             # TODO: Si l'operation a échoué, continuez la compensation des étapes précedentes.
+            self.logger.error(f"Erreur dans StockDecreaseFailedHandler : {str(e)}")
             event_data['error'] = str(e)
   

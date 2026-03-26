@@ -44,32 +44,34 @@ class OutboxProcessor():
             session.close()
 
     def _process_outbox_item(self, event_data, outbox_item):
-        """Processes a single outbox item and changes the saga state based on result"""
         session = get_sqlalchemy_session()
         event_data['event'] = "PaymentCreated"
-        try:       
+        try:
             payment_response = self._request_payment_transaction(outbox_item)
             if payment_response.ok:
-                data = payment_response.json() 
+                data = payment_response.json()
+                # Mise à jour MySQL
                 order = session.query(Outbox).filter(Outbox.order_id == outbox_item.order_id).first()
                 order.payment_id = data['payment_id']
                 session.commit()
-                # TODO: après la mise à jour à MySQL, il faut également mettre la commande à jour dans Redis
-                # Vous pouvez réutiliser le code présent dans OrderController, lignes 40-43
+
+                # Synchronisation Redis (CQRS)
                 update_succeeded = modify_order(event_data["order_id"], True, order.payment_id)
+
+                # Lien vers la Gateway pour le client
                 event_data["payment_link"] = f"http://api-gateway:8080/payments-api/payments/process/{order.payment_id}"
+
                 if not update_succeeded:
-                    raise Exception(f"Erreur : la mise à jour de la commande après la génération du paiement a échoué.")
+                    raise Exception("La mise à jour Redis a échoué.")
             else:
-                text = payment_response.json() 
-                raise Exception(f"Error {payment_response.status_code} : {text}")
+                raise Exception(f"Paiement API Error: {payment_response.status_code}")
         except Exception as e:
             session.rollback()
-            self.logger.debug("La création d'une transaction de paiement a échoué (2) : " + str(e))
             event_data['event'] = "PaymentCreationFailed"
             event_data['error'] = str(e)
         finally:
             session.close()
+            # Notification de la fin de l'étape à Kafka
             OrderEventProducer().get_instance().send(config.KAFKA_TOPIC, value=event_data)
 
     def _request_payment_transaction(self, outbox_item):
